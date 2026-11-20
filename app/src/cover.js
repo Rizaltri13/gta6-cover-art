@@ -3,6 +3,11 @@
 // placed into a layout's panels (cover-fit, pan and zoom per panel), a colour
 // grade is laid over the whole piece, then the caption is lettered in Anton
 // with a Pacifico script subtitle, grain, vignette and a white poster frame.
+//
+// Pan is clamped to the photo's real overflow at its zoom, so a panel can
+// never slide far enough to expose the backdrop; the caption is wrapped and
+// shrunk until it fits in two lines, and the subtitle is anchored to the
+// title block so the two can never overlap.
 
 export const SIZES = {
   '1080x1080': [1080, 1080],
@@ -124,6 +129,35 @@ function grainTile() {
   return noiseCanvas;
 }
 
+/**
+ * Max pan offsets (fractions of panel width/height) before the photo's edge
+ * would expose the backdrop. Derived from the photo's real cover-fit size
+ * at the panel's zoom: at zoom 1 a photo that exactly fills the panel
+ * cannot move at all, and zooming in buys exactly the overflow it creates.
+ */
+export function panLimits(photo, rect, zoom) {
+  if (!photo || !photo.naturalWidth || !photo.naturalHeight || !rect) {
+    return { maxOx: 0, maxOy: 0 };
+  }
+  const z = zoom || 1;
+  const scale = Math.max(rect.w / photo.naturalWidth, rect.h / photo.naturalHeight) * z;
+  const pw = photo.naturalWidth * scale;
+  const ph = photo.naturalHeight * scale;
+  return {
+    maxOx: Math.max(0, (pw - rect.w) / 2 / rect.w),
+    maxOy: Math.max(0, (ph - rect.h) / 2 / rect.h),
+  };
+}
+
+/** Clamps a panel's pan to what its photo can actually cover. */
+function clampPan(panel, photo, rect) {
+  const { maxOx, maxOy } = panLimits(photo, rect, panel.zoom || 1);
+  return {
+    ox: Math.max(-maxOx, Math.min(maxOx, panel.ox || 0)),
+    oy: Math.max(-maxOy, Math.min(maxOy, panel.oy || 0)),
+  };
+}
+
 /** Draws one photo into a panel rect, cover-fit, with the panel's pan and zoom. */
 function drawPhotoIntoPanel(ctx, photo, rect, panel) {
   const { x, y, w, h, rot } = rect;
@@ -137,28 +171,58 @@ function drawPhotoIntoPanel(ctx, photo, rect, panel) {
   const scale = Math.max(w / photo.naturalWidth, h / photo.naturalHeight) * zoom;
   const pw = photo.naturalWidth * scale;
   const ph = photo.naturalHeight * scale;
-  const ox = (panel.ox || 0) * w;
-  const oy = (panel.oy || 0) * h;
-  ctx.drawImage(photo, -pw / 2 + ox, -ph / 2 + oy, pw, ph);
+  // Clamp here too, not just in the drag handler: no caller can ever slide
+  // the photo far enough to show the backdrop behind the panel.
+  const { ox, oy } = clampPan(panel, photo, rect);
+  ctx.drawImage(photo, -pw / 2 + ox * w, -ph / 2 + oy * h, pw, ph);
   ctx.restore();
 }
 
-/** Splits a caption into at most two centred lines that fit the width. */
+/** Longest a title line may run, in characters. */
+const TITLE_MAX_CHARS = 48;
+
+/**
+ * Splits a caption into centred lines that fit the width: greedy word wrap
+ * measured with the live font, at most TITLE_MAX_CHARS characters per line,
+ * with overlong words split at the widest prefix that still fits. It may
+ * return more than two lines; the caller shrinks the font until two remain.
+ */
 function wrapCaption(ctx, text, maxWidth) {
   const words = text.split(/\s+/).filter(Boolean);
-  if (words.length === 0) return [];
-  const lines = [''];
-  for (const word of words) {
-    const trial = lines[lines.length - 1] ? `${lines[lines.length - 1]} ${word}` : word;
-    if (ctx.measureText(trial).width <= maxWidth || lines[lines.length - 1] === '') {
-      lines[lines.length - 1] = trial;
-    } else if (lines.length === 1) {
-      lines.push(word);
+  const lines = [];
+  let cur = '';
+  const pushLine = () => { if (cur) lines.push(cur); cur = ''; };
+  for (let word of words) {
+    // A word that is too wide (or too long) is split into fitting chunks.
+    while ((ctx.measureText(word).width > maxWidth || word.length > TITLE_MAX_CHARS) && word.length > 1) {
+      let n = Math.min(word.length - 1, TITLE_MAX_CHARS);
+      while (n > 1 && ctx.measureText(word.slice(0, n)).width > maxWidth) n -= 1;
+      pushLine();
+      lines.push(word.slice(0, n));
+      word = word.slice(n);
+    }
+    const trial = cur ? `${cur} ${word}` : word;
+    const fits = ctx.measureText(trial).width <= maxWidth && trial.length <= TITLE_MAX_CHARS;
+    if (fits) {
+      cur = trial;
+    } else if (!cur) {
+      cur = word;
     } else {
-      lines[1] = `${lines[1]} ${word}`;
+      pushLine();
+      cur = word;
     }
   }
-  return lines.filter(Boolean);
+  pushLine();
+  return lines;
+}
+
+/** Shortens a line with an ellipsis until it fits the width. */
+function fitLine(ctx, text, maxWidth) {
+  let line = text;
+  while (line.length > 1 && ctx.measureText(`${line}…`).width > maxWidth) {
+    line = line.slice(0, -1);
+  }
+  return line.length < text.length ? `${line}…` : line;
 }
 
 /** Letters the title and subtitle over the cover, with a scrim and a sun glow. */
@@ -178,8 +242,53 @@ function drawLettering(ctx, W, H, state, grade) {
   }
   ctx.fillStyle = scrim;
   ctx.fillRect(0, 0, W, H);
+
+  const title = (state.title || '').trim().toUpperCase();
+  const subtitle = (state.subtitle || '').trim();
+  const subSize = m * 0.052;
+
+  // Title first: pick the biggest font whose wrapped lines fit in two lines.
+  // Every line is re-measured after each shrink, so a long title ends up
+  // smaller instead of spilling past the canvas edge.
+  let lines = [];
+  let size = 0;
+  if (title) {
+    size = Math.min(W * 0.17, m * 0.13);
+    const floor = m * 0.05;
+    for (;;) {
+      ctx.font = `${size}px Anton, sans-serif`;
+      try { ctx.letterSpacing = `${Math.round(size * 0.02)}px`; } catch { /* older canvas */ }
+      lines = wrapCaption(ctx, title, W * 0.92);
+      const fits = lines.length <= 2
+        && lines.every((line) => ctx.measureText(line).width <= W * 0.92);
+      if (fits || size <= floor) break;
+      size = Math.max(floor, size - 2);
+    }
+    if (lines.length > 2) {
+      // Even at the smallest font the title needs more than two lines:
+      // fold the overflow into line two, trimmed with an ellipsis.
+      lines = [lines[0], fitLine(ctx, lines.slice(1).join(' '), W * 0.92)];
+    }
+  }
+  const lineHeight = size * 1.02;
+  const blockH = lines.length * lineHeight;
+
+  // Anchor the title block and the subtitle to each other, so they can
+  // never overlap: at the bottom the script sits above the title, at the
+  // top it sits below it. With no title, the subtitle keeps its old spot.
+  let titleTop;
+  let subY = null;
+  if (bottom) {
+    titleTop = H * 0.94 - blockH;
+    if (subtitle) subY = titleTop - subSize * 0.9;
+  } else {
+    titleTop = H * 0.06;
+    if (subtitle) subY = titleTop + blockH + subSize * 0.9;
+  }
+  if (!title && subtitle) subY = bottom ? H * 0.795 : H * 0.075;
+
   // Warm glow behind the title, like a low sun.
-  const gy = bottom ? H * 0.86 : H * 0.16;
+  const gy = title ? titleTop + blockH / 2 : (bottom ? H * 0.86 : H * 0.16);
   const glow = ctx.createRadialGradient(W / 2, gy, 0, W / 2, gy, m * 0.42);
   glow.addColorStop(0, grade.glow);
   glow.addColorStop(1, 'rgba(0, 0, 0, 0)');
@@ -189,33 +298,17 @@ function drawLettering(ctx, W, H, state, grade) {
   ctx.fillRect(0, 0, W, H);
   ctx.restore();
 
-  const title = (state.title || '').trim().toUpperCase();
-  const subtitle = (state.subtitle || '').trim();
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  if (subtitle) {
-    const subSize = m * 0.052;
+  if (subtitle && subY !== null) {
     ctx.font = `${subSize}px Pacifico, cursive`;
     ctx.fillStyle = '#ffd7ef';
     ctx.shadowColor = 'rgba(255, 45, 150, 0.9)';
     ctx.shadowBlur = subSize * 0.5;
-    const subY = bottom ? H * 0.795 : H * 0.075;
     ctx.fillText(subtitle, W / 2, subY);
     ctx.shadowBlur = 0;
   }
   if (title) {
-    let size = Math.min(W * 0.17, m * 0.13);
-    ctx.font = `${size}px Anton, sans-serif`;
-    try { ctx.letterSpacing = `${Math.round(size * 0.02)}px`; } catch { /* older canvas */ }
-    let lines = wrapCaption(ctx, title, W * 0.92);
-    while (lines.length > 2 && size > m * 0.05) {
-      size -= 2;
-      ctx.font = `${size}px Anton, sans-serif`;
-      lines = wrapCaption(ctx, title, W * 0.92);
-    }
-    const lineHeight = size * 1.02;
-    const blockH = lines.length * lineHeight;
-    const topY = bottom ? H * 0.9 - blockH / 2 : H * 0.2 - blockH / 2;
     ctx.font = `${size}px Anton, sans-serif`;
     ctx.lineJoin = 'round';
     ctx.strokeStyle = '#1c0518';
@@ -225,7 +318,7 @@ function drawLettering(ctx, W, H, state, grade) {
     ctx.shadowBlur = size * 0.16;
     ctx.shadowOffsetY = size * 0.03;
     lines.forEach((line, i) => {
-      const y = topY + lineHeight * (i + 0.5);
+      const y = titleTop + lineHeight * (i + 0.5);
       ctx.strokeText(line, W / 2, y);
       ctx.fillText(line, W / 2, y);
     });

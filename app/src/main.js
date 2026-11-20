@@ -1,7 +1,7 @@
 // Vice Cover Studio — wires the page: photos in, caption typed, panels
 // dragged and zoomed, cover out as a PNG. A `?shot=` query sets up a fixed
 // scene for a screenshot instead (./shots.js).
-import { drawCover, panelCount, panelRects, SIZES, LAYOUTS, GRADES } from './cover.js';
+import { drawCover, panelCount, panelRects, panLimits, SIZES, LAYOUTS, GRADES } from './cover.js';
 import { runShot } from './shots.js';
 
 const canvas = document.getElementById('cover');
@@ -27,6 +27,8 @@ export const state = {
   frame: true,
   photos: [],
   photoNames: [],
+  // Indices into photos[] that are built-in samples (not user uploads).
+  samplePhotos: new Set(),
   panels: [
     { photo: 0, zoom: 1, ox: 0, oy: 0 },
     { photo: 1, zoom: 1, ox: 0, oy: 0 },
@@ -103,10 +105,33 @@ function say(message) {
   if (status) status.textContent = message;
 }
 
-/** Adds a photo to the library and repoints empty panels at it. */
-export function addPhoto(img, name) {
+/**
+ * Adds a photo to the library. A user upload takes over the first panel
+ * still showing a sample photo — the first upload lands in panel 1, the
+ * hero slot — and later uploads fill the other panels in order, so an
+ * uploaded photo is always visible on the cover right away. Once every
+ * panel already shows a user photo, the upload goes to the selected panel
+ * instead. Samples never reassign panels: the opening state already points
+ * panels 1–3 at the three samples.
+ */
+export function addPhoto(img, name, { sample = false } = {}) {
   state.photos.push(img);
   state.photoNames.push(name);
+  const index = state.photos.length - 1;
+  if (sample) {
+    state.samplePhotos.add(index);
+  } else {
+    let target = -1;
+    for (let i = 0; i < state.panels.length; i += 1) {
+      if (state.samplePhotos.has(state.panels[i].photo)) {
+        target = i;
+        break;
+      }
+    }
+    if (target < 0) target = state.selected;
+    state.panels[target].photo = index;
+    state.selected = target;
+  }
   renderThumbs();
   redraw();
 }
@@ -116,7 +141,7 @@ export async function loadSample(name) {
   const sample = SAMPLES.find((s) => s.name === name);
   if (!sample) throw new Error(`no sample named ${name}`);
   const img = await loadImage(sample.file);
-  addPhoto(img, sample.label);
+  addPhoto(img, sample.label, { sample: true });
   return img;
 }
 
@@ -175,6 +200,20 @@ function buildChoiceButtons() {
   syncChoiceButtons('sizes', state.size);
 }
 
+/**
+ * Rotates a canvas point into a panel's unrotated local frame, so hit tests
+ * and drag deltas work for tilted panels too (the snaps layout).
+ */
+function toPanelLocal(px, py, rect) {
+  const cx = rect.x + rect.w / 2;
+  const cy = rect.y + rect.h / 2;
+  const dx = px - cx;
+  const dy = py - cy;
+  const cos = Math.cos(-rect.rot);
+  const sin = Math.sin(-rect.rot);
+  return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
+}
+
 /** Finds which panel a preview-canvas point falls in (or -1). */
 function hitPanel(clientX, clientY) {
   const box = canvas.getBoundingClientRect();
@@ -185,9 +224,23 @@ function hitPanel(clientX, clientY) {
   const n = panelCount(state.layout);
   for (let i = n - 1; i >= 0; i -= 1) {
     const r = rects[i];
-    if (px >= r.x && px <= r.x + r.w && py >= r.y && py <= r.y + r.h) return i;
+    const local = toPanelLocal(px, py, r);
+    if (Math.abs(local.x) <= r.w / 2 && Math.abs(local.y) <= r.h / 2) return i;
   }
   return -1;
+}
+
+/** Clamps a panel's pan to what its photo can actually cover at its zoom. */
+function clampPanelPan(i) {
+  const panel = state.panels[i];
+  if (!panel) return;
+  const rects = panelRects(state.layout, ...SIZES[state.size]);
+  const rect = rects[i];
+  if (!rect) return;
+  const photo = state.photos[panel.photo];
+  const { maxOx, maxOy } = panLimits(photo, rect, panel.zoom || 1);
+  panel.ox = Math.max(-maxOx, Math.min(maxOx, panel.ox || 0));
+  panel.oy = Math.max(-maxOy, Math.min(maxOy, panel.oy || 0));
 }
 
 /** Drag on the preview pans the selected panel's photo; wheel zooms it. */
@@ -214,10 +267,15 @@ function wireCanvasDrag() {
     const rect = rects[state.selected];
     if (!rect) return;
     const panel = state.panels[state.selected];
-    panel.ox += ((e.clientX - lastX) / box.width) * (W / rect.w);
-    panel.oy += ((e.clientY - lastY) / box.height) * (H / rect.h);
-    panel.ox = Math.max(-0.6, Math.min(0.6, panel.ox));
-    panel.oy = Math.max(-0.6, Math.min(0.6, panel.oy));
+    // Drag delta in canvas pixels, rotated into the panel's own frame so a
+    // tilted snap pans along its own axes instead of the screen's.
+    const dx = (e.clientX - lastX) * (W / box.width);
+    const dy = (e.clientY - lastY) * (H / box.height);
+    const cos = Math.cos(-rect.rot);
+    const sin = Math.sin(-rect.rot);
+    panel.ox += (dx * cos - dy * sin) / rect.w;
+    panel.oy += (dx * sin + dy * cos) / rect.h;
+    clampPanelPan(state.selected);
     lastX = e.clientX;
     lastY = e.clientY;
     redraw();
@@ -232,6 +290,7 @@ function wireCanvasDrag() {
     state.selected = hit;
     const panel = state.panels[hit];
     panel.zoom = Math.max(1, Math.min(2.5, (panel.zoom || 1) * (e.deltaY < 0 ? 1.08 : 0.93)));
+    clampPanelPan(hit);
     redraw();
   }, { passive: false });
 }
@@ -267,7 +326,9 @@ function wireControls() {
         say(`Could not read ${file.name}.`);
       }
     }
-    if (files.length) say(`${files.length} photo${files.length === 1 ? '' : 's'} loaded — click a panel, then drag to crop.`);
+    if (files.length) {
+      say(`${files.length} photo${files.length === 1 ? '' : 's'} loaded into panel ${state.selected + 1} — drag to crop.`);
+    }
     e.target.value = '';
   });
   document.getElementById('sample-boulevard').addEventListener('click', () => loadSample('boulevard'));
@@ -282,6 +343,7 @@ function wireControls() {
   document.getElementById('zoom').addEventListener('input', (e) => {
     const panel = state.panels[state.selected];
     panel.zoom = Number(e.target.value);
+    clampPanelPan(state.selected);
     redraw();
   });
   document.getElementById('next-photo').addEventListener('click', () => {
