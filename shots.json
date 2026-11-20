@@ -1,1 +1,26 @@
-[{"h":720,"name":"1-cover.jpg","query":"?shot=cover&photo=boulevard,rooftop,neon&layout=hero&grade=sunset&title=VICE%20CITY&subtitle=Neon%20Nights&size=1920x1080","w":1280},{"h":900,"name":"2-editor.jpg","query":"?shot=editor&photo=boulevard,rooftop,neon&layout=hero&grade=sunset&title=VICE%20CITY&subtitle=Neon%20Nights&size=1080x1080&selected=1","w":1280},{"h":1280,"name":"3-cover-portrait.jpg","query":"?shot=cover&photo=rooftop,boulevard,neon&layout=grid&grade=neon&title=OCEAN%20DRIVE&subtitle=Midnight%20Run&size=1080x1350","w":1024},{"h":1024,"name":"4-cover-square.jpg","query":"?shot=cover&photo=neon,rooftop,boulevard&layout=snaps&grade=gold&title=PALM%20GOLD&subtitle=Golden%20Hour&size=1080x1080","w":1024}]
+[
+  {
+    "h": 720,
+    "name": "1-cover.jpg",
+    "query": "?shot=cover&photo=boulevard,rooftop,neon&layout=hero&grade=sunset&title=VICE%20CITY&subtitle=Neon%20Nights&size=1920x1080",
+    "w": 1280
+  },
+  {
+    "h": 900,
+    "name": "2-editor.jpg",
+    "query": "?shot=editor&photo=boulevard,rooftop,neon&layout=hero&grade=sunset&title=VICE%20CITY&subtitle=Neon%20Nights&size=1080x1080&selected=1",
+    "w": 1280
+  },
+  {
+    "h": 1280,
+    "name": "3-cover-portrait.jpg",
+    "query": "?shot=cover&photo=rooftop,boulevard,neon&layout=grid&grade=neon&title=OCEAN%20DRIVE&subtitle=Midnight%20Run&size=1080x1350",
+    "w": 1024
+  },
+  {
+    "h": 1024,
+    "name": "4-cover-square.jpg",
+    "query": "?shot=cover&photo=neon,rooftop,boulevard&layout=snaps&grade=gold&title=PALM%20GOLD&subtitle=Golden%20Hour&size=1080x1080",
+    "w": 1024
+  }
+]

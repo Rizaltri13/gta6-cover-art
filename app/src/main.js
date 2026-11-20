@@ -1,6 +1,6 @@
-// Vice Cover Studio — wires the page: photos in, caption typed, panels
+// Vice Cover Studio — the editor wiring: photos in, caption typed, panels
 // dragged and zoomed, cover out as a PNG. A `?shot=` query sets up a fixed
-// scene for a screenshot instead (./shots.js).
+// scene for a screenshot instead (see ./shots.js).
 import { drawCover, panelCount, panelRects, panLimits, SIZES, LAYOUTS, GRADES } from './cover.js';
 import { runShot } from './shots.js';
 

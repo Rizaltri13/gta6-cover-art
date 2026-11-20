@@ -1,13 +1,16 @@
 // Vice Cover Studio — the cover engine.
-// Draws a multi-panel GTA-poster-style cover onto any 2D canvas: photos are
-// placed into a layout's panels (cover-fit, pan and zoom per panel), a colour
-// grade is laid over the whole piece, then the caption is lettered in Anton
-// with a Pacifico script subtitle, grain, vignette and a white poster frame.
 //
-// Pan is clamped to the photo's real overflow at its zoom, so a panel can
-// never slide far enough to expose the backdrop; the caption is wrapped and
-// shrunk until it fits in two lines, and the subtitle is anchored to the
-// title block so the two can never overlap.
+// Renders a GTA-poster-style cover onto a 2D canvas: photos are fitted into
+// the panels of a layout (cover-fit, with per-panel pan and zoom), a colour
+// grade is washed over the whole piece, then the caption is set in Anton
+// with a Pacifico script subtitle, and the finish is grain, vignette and a
+// white poster frame.
+//
+// The guarantees that matter: pan can never slide a photo far enough to
+// show the backdrop (it is clamped to the photo's real overflow at its
+// zoom); a long caption is wrapped and shrunk until it fits in two lines;
+// and the subtitle is anchored to the title block, so the two lines of
+// lettering can never collide.
 
 export const SIZES = {
   '1080x1080': [1080, 1080],
@@ -95,7 +98,7 @@ export function panelRects(layout, W, H) {
   if (layout === 'bleed') {
     return [{ x: 0, y: 0, w: W, h: H, rot: 0 }];
   }
-  // snaps: three tilted prints scattered over a sunset backdrop.
+  // snaps: three tilted prints scattered across a sunset backdrop.
   return [
     { x: W * 0.05, y: H * 0.06, w: W * 0.55, h: H * 0.52, rot: -0.07 },
     { x: W * 0.44, y: H * 0.12, w: W * 0.52, h: H * 0.48, rot: 0.05 },
@@ -110,7 +113,7 @@ export function panelCount(layout) {
 
 let noiseCanvas = null;
 
-/** A small tile of random grey noise, reused for the film grain. */
+/** A small tile of random grey noise, reused as the film grain. */
 function grainTile() {
   if (noiseCanvas) return noiseCanvas;
   noiseCanvas = document.createElement('canvas');
@@ -130,10 +133,11 @@ function grainTile() {
 }
 
 /**
- * Max pan offsets (fractions of panel width/height) before the photo's edge
- * would expose the backdrop. Derived from the photo's real cover-fit size
- * at the panel's zoom: at zoom 1 a photo that exactly fills the panel
- * cannot move at all, and zooming in buys exactly the overflow it creates.
+ * The largest pan offsets (as fractions of panel width/height) before the
+ * photo's edge would uncover the backdrop. Worked out from the photo's real
+ * cover-fit size at the panel's zoom: at zoom 1 a photo that just fills the
+ * panel cannot move at all, and zooming in buys exactly the overflow it
+ * creates.
  */
 export function panLimits(photo, rect, zoom) {
   if (!photo || !photo.naturalWidth || !photo.naturalHeight || !rect) {
