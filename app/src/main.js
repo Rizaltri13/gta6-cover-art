@@ -1,7 +1,9 @@
-// Vice Cover Studio — the editor wiring: photos in, caption typed, panels
-// dragged and zoomed, cover out as a PNG. A `?shot=` query sets up a fixed
-// scene for a screenshot instead (see ./shots.js).
-import { drawCover, panelCount, panelRects, panLimits, SIZES, LAYOUTS, GRADES } from './cover.js';
+// Vice Cover Studio — Neon Harbor edition: the editor wiring.
+// Photos come in, the caption gets typed, panels are dragged, zoomed and
+// reframed around their focal point, and the finished cover leaves as a
+// PNG. A `?shot=` query sets up a fixed scene for a screenshot instead
+// (see ./shots.js).
+import { drawCover, panelCount, panelRects, panLimits, panelFocal, SIZES, LAYOUTS, GRADES } from './cover.js';
 import { runShot } from './shots.js';
 
 const canvas = document.getElementById('cover');
@@ -9,18 +11,25 @@ const status = document.getElementById('status');
 const titleInput = document.getElementById('title');
 const subtitleInput = document.getElementById('subtitle');
 
+// The Neon Harbor demo set: four photographic samples, generated for this
+// edition, loaded on first paint so the opening screen is already a
+// finished cover. Their order matters — panels 1–4 take them in order,
+// so the pink-suit hero opens in the big close-up slot.
 const SAMPLES = [
-  { name: 'boulevard', label: 'Boulevard', file: 'samples/boulevard.jpg' },
-  { name: 'rooftop', label: 'Rooftop', file: 'samples/rooftop.jpg' },
-  { name: 'neon', label: 'Neon Street', file: 'samples/neon.jpg' },
+  { name: 'hero', label: 'Pink Suit Hero', file: 'samples/hero.jpg' },
+  { name: 'detective', label: 'Detective & Turquoise Car', file: 'samples/detective.jpg' },
+  { name: 'neon', label: 'Neon Nights', file: 'samples/neon.jpg' },
+  { name: 'palms', label: 'Palm Sunset', file: 'samples/palms.jpg' },
 ];
 
+const freshPanel = (photo) => ({ photo, zoom: 1, ox: 0, oy: 0, fx: 0.5, fy: 0.32 });
+
 export const state = {
-  size: '1080x1080',
+  size: '1920x1080',
   layout: 'hero',
   grade: 'sunset',
-  title: 'VICE CITY',
-  subtitle: 'Neon Nights',
+  title: 'NEON HARBOR',
+  subtitle: 'Paid in Sunshine',
   titlePos: 'bottom',
   grain: true,
   vignette: true,
@@ -29,12 +38,7 @@ export const state = {
   photoNames: [],
   // Indices into photos[] that are built-in samples (not user uploads).
   samplePhotos: new Set(),
-  panels: [
-    { photo: 0, zoom: 1, ox: 0, oy: 0 },
-    { photo: 1, zoom: 1, ox: 0, oy: 0 },
-    { photo: 2, zoom: 1, ox: 0, oy: 0 },
-    { photo: 0, zoom: 1, ox: 0, oy: 0 },
-  ],
+  panels: [freshPanel(0), freshPanel(1), freshPanel(2), freshPanel(3)],
   selected: 0,
 };
 
@@ -61,7 +65,7 @@ function syncChoiceButtons(groupId, value) {
   });
 }
 
-/** Updates the selected-panel readout and the zoom slider. */
+/** Updates the selected-panel readout, zoom slider and focal readout. */
 function syncPanelControls() {
   const panel = state.panels[state.selected] || state.panels[0];
   const label = document.getElementById('panel-label');
@@ -73,6 +77,11 @@ function syncPanelControls() {
   if (zoom) zoom.value = String(panel.zoom || 1);
   const zoomOut = document.getElementById('zoom-out');
   if (zoomOut) zoomOut.textContent = `${Math.round((panel.zoom || 1) * 100)}%`;
+  const focalOut = document.getElementById('focal-out');
+  if (focalOut) {
+    const { fx, fy } = panelFocal(panel);
+    focalOut.textContent = `${Math.round(fx * 100)}% × ${Math.round(fy * 100)}%`;
+  }
 }
 
 /** Renders the photo thumbnails strip from the loaded photos. */
@@ -110,33 +119,27 @@ function say(message) {
  * still showing a sample photo — the first upload lands in panel 1, the
  * hero slot — and later uploads fill the other panels in order, so an
  * uploaded photo is always visible on the cover right away. Once every
- * panel already shows a user photo, the upload goes to the selected panel
- * instead. Samples never reassign panels: the opening state already points
- * panels 1–3 at the three samples.
+ * panel already shows an upload, new photos just join the library.
  */
 export function addPhoto(img, name, { sample = false } = {}) {
+  const index = state.photos.length;
   state.photos.push(img);
   state.photoNames.push(name);
-  const index = state.photos.length - 1;
-  if (sample) {
-    state.samplePhotos.add(index);
-  } else {
-    let target = -1;
-    for (let i = 0; i < state.panels.length; i += 1) {
-      if (state.samplePhotos.has(state.panels[i].photo)) {
-        target = i;
-        break;
-      }
+  if (sample) state.samplePhotos.add(index);
+  if (!sample) {
+    const target = state.panels.findIndex((p) => state.samplePhotos.has(p.photo));
+    if (target >= 0) {
+      state.panels[target].photo = index;
+      state.panels[target].ox = 0;
+      state.panels[target].oy = 0;
     }
-    if (target < 0) target = state.selected;
-    state.panels[target].photo = index;
-    state.selected = target;
   }
   renderThumbs();
   redraw();
+  return index;
 }
 
-/** Loads one of the built-in sample photos by name. */
+/** Loads one of the built-in samples by name and adds it to the library. */
 export async function loadSample(name) {
   const sample = SAMPLES.find((s) => s.name === name);
   if (!sample) throw new Error(`no sample named ${name}`);
@@ -201,8 +204,9 @@ function buildChoiceButtons() {
 }
 
 /**
- * Rotates a canvas point into a panel's unrotated local frame, so hit tests
- * and drag deltas work for tilted panels too (the snaps layout).
+ * Rotates a canvas point into a panel's unrotated local frame, so hit
+ * tests, drag deltas and the focal marker all work for tilted panels too
+ * (the snaps layout).
  */
 function toPanelLocal(px, py, rect) {
   const cx = rect.x + rect.w / 2;
@@ -214,12 +218,22 @@ function toPanelLocal(px, py, rect) {
   return { x: dx * cos - dy * sin, y: dx * sin + dy * cos };
 }
 
-/** Finds which panel a preview-canvas point falls in (or -1). */
-function hitPanel(clientX, clientY) {
+/** Converts a pointer event into cover-canvas pixel coordinates. */
+function canvasPoint(clientX, clientY) {
   const box = canvas.getBoundingClientRect();
   const [W, H] = SIZES[state.size];
-  const px = ((clientX - box.left) / box.width) * W;
-  const py = ((clientY - box.top) / box.height) * H;
+  return {
+    px: ((clientX - box.left) / box.width) * W,
+    py: ((clientY - box.top) / box.height) * H,
+    box,
+    W,
+    H,
+  };
+}
+
+/** Finds which panel a preview-canvas point falls in (or -1). */
+function hitPanel(clientX, clientY) {
+  const { px, py, W, H } = canvasPoint(clientX, clientY);
   const rects = panelRects(state.layout, W, H);
   const n = panelCount(state.layout);
   for (let i = n - 1; i >= 0; i -= 1) {
@@ -228,6 +242,37 @@ function hitPanel(clientX, clientY) {
     if (Math.abs(local.x) <= r.w / 2 && Math.abs(local.y) <= r.h / 2) return i;
   }
   return -1;
+}
+
+/**
+ * True when a pointer event lands on the selected panel's focal marker —
+ * grabbing the marker reframes the panel instead of panning the photo.
+ */
+function hitFocalMarker(clientX, clientY) {
+  const { px, py, W, H } = canvasPoint(clientX, clientY);
+  const rects = panelRects(state.layout, W, H);
+  const rect = rects[state.selected];
+  const panel = state.panels[state.selected];
+  if (!rect || !panel) return false;
+  const local = toPanelLocal(px, py, rect);
+  const { fx, fy } = panelFocal(panel);
+  const mx = -rect.w / 2 + fx * rect.w;
+  const my = -rect.h / 2 + fy * rect.h;
+  const grab = Math.max(0.05 * Math.min(W, H), rect.w * 0.09);
+  return Math.hypot(local.x - mx, local.y - my) <= grab;
+}
+
+/** Moves the selected panel's focal point to a pointer position. */
+function dragFocalTo(clientX, clientY) {
+  const { px, py, W, H } = canvasPoint(clientX, clientY);
+  const rects = panelRects(state.layout, W, H);
+  const rect = rects[state.selected];
+  const panel = state.panels[state.selected];
+  if (!rect || !panel) return;
+  const local = toPanelLocal(px, py, rect);
+  panel.fx = Math.max(0.02, Math.min(0.98, (local.x + rect.w / 2) / rect.w));
+  panel.fy = Math.max(0.02, Math.min(0.98, (local.y + rect.h / 2) / rect.h));
+  redraw();
 }
 
 /** Clamps a panel's pan to what its photo can actually cover at its zoom. */
@@ -243,16 +288,26 @@ function clampPanelPan(i) {
   panel.oy = Math.max(-maxOy, Math.min(maxOy, panel.oy || 0));
 }
 
-/** Drag on the preview pans the selected panel's photo; wheel zooms it. */
+/**
+ * Pointer work on the preview: grabbing the focal marker reframes the
+ * selected panel; dragging anywhere else pans its photo (clamped to the
+ * real overflow); the wheel zooms the panel under the pointer.
+ */
 function wireCanvasDrag() {
-  let dragging = false;
+  let mode = null; // 'focal' | 'pan'
   let lastX = 0;
   let lastY = 0;
   canvas.addEventListener('pointerdown', (e) => {
+    if (hitFocalMarker(e.clientX, e.clientY)) {
+      mode = 'focal';
+      canvas.setPointerCapture(e.pointerId);
+      dragFocalTo(e.clientX, e.clientY);
+      return;
+    }
     const hit = hitPanel(e.clientX, e.clientY);
     if (hit >= 0) {
       state.selected = hit;
-      dragging = true;
+      mode = 'pan';
       lastX = e.clientX;
       lastY = e.clientY;
       canvas.setPointerCapture(e.pointerId);
@@ -260,7 +315,11 @@ function wireCanvasDrag() {
     }
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
+    if (mode === 'focal') {
+      dragFocalTo(e.clientX, e.clientY);
+      return;
+    }
+    if (mode !== 'pan') return;
     const box = canvas.getBoundingClientRect();
     const [W, H] = SIZES[state.size];
     const rects = panelRects(state.layout, W, H);
@@ -280,7 +339,7 @@ function wireCanvasDrag() {
     lastY = e.clientY;
     redraw();
   });
-  const stop = () => { dragging = false; };
+  const stop = () => { mode = null; };
   canvas.addEventListener('pointerup', stop);
   canvas.addEventListener('pointercancel', stop);
   canvas.addEventListener('wheel', (e) => {
@@ -307,10 +366,10 @@ export function exportCover() {
     }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `vice-cover-${W}x${H}.png`;
+    a.download = `neon-harbor-cover-${W}x${H}.png`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-    say(`Saved vice-cover-${W}x${H}.png — share it anywhere.`);
+    say(`Saved neon-harbor-cover-${W}x${H}.png — share it anywhere.`);
   }, 'image/png');
 }
 
@@ -327,13 +386,13 @@ function wireControls() {
       }
     }
     if (files.length) {
-      say(`${files.length} photo${files.length === 1 ? '' : 's'} loaded into panel ${state.selected + 1} — drag to crop.`);
+      say(`${files.length} photo${files.length === 1 ? '' : 's'} loaded — drag a panel to crop, drag its ◎ marker to reframe.`);
     }
     e.target.value = '';
   });
-  document.getElementById('sample-boulevard').addEventListener('click', () => loadSample('boulevard'));
-  document.getElementById('sample-rooftop').addEventListener('click', () => loadSample('rooftop'));
-  document.getElementById('sample-neon').addEventListener('click', () => loadSample('neon'));
+  for (const sample of SAMPLES) {
+    document.getElementById(`sample-${sample.name}`)?.addEventListener('click', () => loadSample(sample.name));
+  }
   titleInput.addEventListener('input', () => { state.title = titleInput.value; redraw(); });
   subtitleInput.addEventListener('input', () => { state.subtitle = subtitleInput.value; redraw(); });
   document.getElementById('title-pos').addEventListener('change', (e) => {
@@ -357,7 +416,10 @@ function wireControls() {
     panel.zoom = 1;
     panel.ox = 0;
     panel.oy = 0;
+    panel.fx = 0.5;
+    panel.fy = 0.32;
     redraw();
+    say(`Panel ${state.selected + 1} reset — centred on its focal point.`);
   });
   for (const id of ['grain', 'vignette', 'frame']) {
     document.getElementById(id).addEventListener('change', (e) => {
@@ -378,7 +440,7 @@ function wireControls() {
   wireCanvasDrag();
 }
 
-/** Boots the app: controls, fonts, samples, then the first draw. */
+/** Boots the app: controls, fonts, the demo set, then the first draw. */
 async function boot() {
   wireControls();
   // Lettering needs the vendored fonts; redraw once they arrive.
@@ -387,9 +449,10 @@ async function boot() {
     document.fonts.load('100px Pacifico').catch(() => {});
     document.fonts.ready.then(() => redraw());
   }
-  const shot = new URLSearchParams(location.search).get('shot');
+  const query = new URLSearchParams(location.search);
+  const shot = query.get('shot');
   if (shot) {
-    await runShot(shot, new URLSearchParams(location.search), {
+    await runShot(shot, query, {
       loadSample,
       applyPreset,
       redraw,
@@ -397,10 +460,19 @@ async function boot() {
     });
     return;
   }
-  // No shot: open with the three sample photos already loaded.
-  await Promise.allSettled(SAMPLES.map((s) => loadSample(s.name)));
+  // No shot: open on the finished Neon Harbor demo cover — hero layout,
+  // sunset grade, all four photographic samples already in their panels.
+  for (const sample of SAMPLES) {
+    try {
+      await loadSample(sample.name);
+    } catch {
+      // A missing sample never blocks the editor.
+    }
+  }
+  state.panels = [freshPanel(0), freshPanel(1), freshPanel(2), freshPanel(3)];
+  state.selected = 0;
   redraw();
-  say('Pick a layout and a grade, type your caption, then export a PNG.');
+  say('Neon Harbor demo loaded — make it yours, then export.');
 }
 
 boot();

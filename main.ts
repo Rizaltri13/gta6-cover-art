@@ -1,7 +1,11 @@
-// Vice Cover Studio — the entry program (Node 22, standard library only).
-// It hands the app in: copies this repository's app/ and screenshots/ into
-// the output directory and writes /output/dossier.json with the vendored
-// make.fun library, so the gate and the judge read exactly what was built.
+// Vice Cover Studio — Neon Harbor edition: the entry program.
+// Node 22, standard library only. It hands the finished studio in: this
+// repository's app/ and screenshots/ are copied into the output
+// directory, and /output/dossier.json is written with the vendored
+// make.fun library, so the gate and the judge read exactly what was
+// built — nothing more, nothing fetched. Running it twice over the same
+// tree produces a byte-identical dossier.json, which the hand-in relies
+// on.
 //
 // Run it locally with MAKEFUN_OUTPUT_DIR set, e.g.:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
@@ -15,10 +19,10 @@ import { buildDossier } from './vendor/makefun-app.ts';
 const repoRoot = fileURLToPath(new URL('.', import.meta.url));
 const outputDir = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
 
-// The scorer's caps for this bounty (reference/gate.json): the dossier text
-// is capped at 160 KiB; the other limits refuse an entry the scorer would
-// refuse anyway (more than 4 screenshots, one over 256 KiB, app/ over 993
-// files or 48 MiB, or a path under app/ over 1000 bytes).
+// The scorer's caps for this bounty (reference/gate.json), mirrored so a
+// local run fails the same way the scorer would: dossier text capped at
+// 160 KiB, at most 4 screenshots of at most 256 KiB each, app/ under 993
+// files and 48 MiB, and no path under app/ longer than 1000 bytes.
 const dossierOptions = {
   text_max_bytes: 163840,
   screenshots: { max: 4, max_bytes: 262144 },
@@ -34,4 +38,4 @@ if (existsSync(join(repoRoot, 'screenshots'))) {
   cpSync(join(repoRoot, 'screenshots'), join(outputDir, 'screenshots'), { recursive: true });
 }
 writeFileSync(join(outputDir, 'dossier.json'), buildDossier(outputDir, dossierOptions));
-console.log(`Vice Cover Studio handed in to ${outputDir}`);
+console.log(`Vice Cover Studio (Neon Harbor edition) handed in to ${outputDir}`);

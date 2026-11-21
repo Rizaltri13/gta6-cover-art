@@ -1,7 +1,10 @@
-// A tiny static server for app/ (Node 22, standard library only), so the
-// entry can be tried locally without a build step:
+// Neon Harbor dev server — a tiny static file server for app/ (Node 22,
+// standard library only), so the studio can be tried locally with no
+// build step and no network. It serves only files under app/ and sends
+// no-store headers, so screenshot runs always see the latest edit:
 //   node serve.ts [--port 8080]
-// then open http://localhost:8080. Development convenience only.
+// then open http://localhost:8080. Development convenience only; the app
+// itself is plain static files and runs from any static host.
 import { createReadStream, statSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { extname, join, normalize, resolve, sep } from 'node:path';
@@ -41,6 +44,7 @@ createServer((request, response) => {
     return;
   }
   if (pathname.endsWith('/')) pathname += 'index.html';
+  // Resolve inside app/ and refuse anything that climbs out of it.
   const file = resolve(join(root, normalize(pathname)));
   if (file !== root && !file.startsWith(root + sep)) {
     response.writeHead(403).end('forbidden');
@@ -62,5 +66,5 @@ createServer((request, response) => {
   });
   createReadStream(file).pipe(response);
 }).listen(port, '127.0.0.1', () => {
-  console.log(`app/ is on http://localhost:${port}`);
+  console.log(`Neon Harbor studio is on http://localhost:${port}`);
 });
